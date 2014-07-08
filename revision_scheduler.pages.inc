@@ -166,21 +166,17 @@ function revision_scheduler_edit_form($form, &$form_state, $operation) {
   $form['datetime'] = array(
     '#type' => 'textfield',
     '#title' => t('Scheduled date'),
-    '#default_value' => !empty($operation->time_scheduled) ? format_date($operation->time_scheduled, 'custom', 'm/d/Y - H:i') : '',
+    '#default_value' => !empty($operation->time_scheduled) ? format_date($operation->time_scheduled, 'custom', 'Y-m-d H:i') : '',
     '#required' => TRUE,
     //'#description' => t('The time will be submitted using the @timezone time zone.', array('@timezone' => drupal_get_user_timezone())),
   );
 
   if (module_exists('date_popup')) {
     $form['datetime']['#type'] = 'date_popup';
-    $form['datetime']['#date_format'] = 'm/d/Y - H:i';
+    $form['datetime']['#date_format'] = 'Y-m-d H:i';
     $form['datetime']['#date_year_range'] = '0:+5';
     $form['datetime']['#date_increment'] = 15;
-    unset($form['datetime']['#description']);
-
-    if (!empty($operation->time_scheduled)) {
-      $form['datetime']['#default_value'] = format_date($operation->time_scheduled, 'custom', 'Y-m-d H:i');
-    }
+    //unset($form['datetime']['#description']);
   }
 
   $form['actions'] = array('#type' => 'actions');
