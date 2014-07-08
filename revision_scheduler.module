@@ -82,7 +82,8 @@ function revision_scheduler_menu() {
  */
 function revision_scheduler_preprocess_menu_local_action(&$variables) {
   $link = &$variables['element']['#link'];
-  if ($link['path'] == 'node/%/revisions/schedule/add' || $link['path'] == 'node/%/moderation/schedule/add') {
+  if (isset($link['href']) && !isset($link['localized_options']['query']['destination']) && preg_match('#node/\d+/(revisions|moderation)/schedule/add#', $link['href'])) {
+    $link += array('localized_options' => array());
     $link['localized_options'] += array('query' => array());
     $link['localized_options']['query'] += drupal_get_destination();
   }
