@@ -295,10 +295,8 @@ function revision_scheduler_operation_process($operation) {
       throw new Exception(t('Revision operation @operation callback @callback does not exist.', $args + array('@callback' => $callback)));
     }
 
-    db_update('revision_scheduler')
-      ->fields(array('time_executed' => REQUEST_TIME))
-      ->condition('id', $operation->id)
-      ->execute();
+    $operation->time_executed = REQUEST_TIME;
+    revision_scheduler_operation_save($operation);
 
     // Run the operation callback with the entity and operation.
     $callback($entity, $operation);
