@@ -107,6 +107,33 @@ function revision_scheduler_admin_paths() {
   return $paths;
 }
 
+/**
+ * Implements hook_entity_delete().
+ */
+function revision_scheduler_entity_delete($entity, $entity_type) {
+  // Delete all the entity's revisions from the revision_scheduler table.
+  list($entity_id) = entity_extract_ids($entity_type, $entity);
+  db_delete('revision_scheduler')
+    ->condition('entity_type', $entity_type)
+    ->condition('entity_id', $entity_id)
+    ->execute();
+}
+
+/**
+ * Implements hook_field_attach_delete_revision().
+ */
+function revision_scheduler_field_attach_delete_revision($entity_type, $entity) {
+  // Delete the entity's revision from the revision_scheduler table.
+  list($entity_id, $revision_id) = entity_extract_ids($entity_type, $entity);
+  db_delete('revision_scheduler')
+    ->condition('entity_type', $entity_type)
+    ->condition('entity_id', $entity_id)
+    ->condition('revision_id', $revision_id)
+    // Only delete un-executed operations.
+    ->condition('time_executed', 0)
+    ->execute();
+}
+
 function revision_scheduler_entity_type_has_revisions($entity_type) {
   $info = entity_get_info($entity_type);
   return !empty($info['entity keys']['revision']) && !empty($info['revision table']);
@@ -267,17 +294,17 @@ function revision_scheduler_operation_process($operation) {
       throw new Exception(t('Revision operation @operation callback @callback does not exist.', $args + array('@callback' => $callback)));
     }
 
+    db_update('revision_scheduler')
+      ->fields(array('time_executed' => REQUEST_TIME))
+      ->condition('id', $operation->id)
+      ->execute();
+
     // Run the operation callback with the entity and operation.
     $callback($entity, $operation);
 
     // Allow modules to react to the operation after it has been processed.
     module_invoke_all('revision_scheduler_operation_postprocess', $entity, $operation);
     watchdog('revision_scheduler', 'Performed scheduled revision operation @operation on @entity-type @entity-id revision @revision-id.', $args);
-
-    db_update('revision_scheduler')
-      ->fields(array('time_executed' => REQUEST_TIME))
-      ->condition('id', $operation->id)
-      ->execute();
   }
   catch (Exception $e) {
     $transaction->rollback();
