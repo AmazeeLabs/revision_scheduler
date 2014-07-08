@@ -94,6 +94,7 @@ function revision_scheduler_preprocess_menu_local_action(&$variables) {
 function revision_scheduler_admin_paths() {
   $paths = array();
   if (variable_get('node_admin_theme')) {
+    $paths['node/*/revisions/list'] = TRUE;
     $paths['node/*/revisions/schedule'] = TRUE;
     $paths['node/*/revisions/schedule/add'] = TRUE;
 
