@@ -18,12 +18,15 @@ function revision_scheduler_permission() {
  * Implements hook_menu().
  */
 function revision_scheduler_menu() {
-  $items['node/%node/revisions/list'] = array(
-    'title' => 'List',
-    'type' => MENU_DEFAULT_LOCAL_TASK,
-    'weight' => -10,
-    'file path' => drupal_get_path('module', 'node'),
-  );
+  // The diff.module already defines this menu path, so skip it if enabled.
+  if (!module_exists('diff')) {
+    $items['node/%node/revisions/list'] = array(
+      'title' => 'List',
+      'type' => MENU_DEFAULT_LOCAL_TASK,
+      'weight' => -10,
+      'file path' => drupal_get_path('module', 'node'),
+    );
+  }
 
   $items['node/%node/revisions/schedule'] = array(
     'title' => 'Schedule',
