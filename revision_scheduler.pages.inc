@@ -193,9 +193,17 @@ function revision_scheduler_edit_form($form, &$form_state, $operation) {
   $form['actions']['cancel'] = array(
     '#type' => 'link',
     '#title' => t('Cancel'),
-    '#href' => isset($_GET['destination']) ? $_GET['destination'] : '<front>',
+    '#href' => '<front>',
     '#weight' => 10,
   );
+
+  if (isset($_GET['destination'])) {
+    $url = drupal_parse_url(urldecode($_GET['destination']));
+    $form['actions']['cancel']['#href'] = $url['path'];
+    if (!empty($url['query'])) {
+      $form['actions']['cancel']['#options']['query'] = $url['query'];
+    }
+  }
 
   return $form;
 }
