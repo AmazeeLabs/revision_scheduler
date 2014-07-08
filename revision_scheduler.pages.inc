@@ -212,8 +212,8 @@ function revision_scheduler_edit_form_validate($form, &$form_state) {
     if ($date === FALSE) {
       form_set_error('datetime', t('Invalid date.'));
     }
-    elseif ($date < time()) {
-      //form_set_error('datetime', t('You must set a scheduled date in the future.'));
+    elseif ($date < REQUEST_TIME) {
+      form_set_error('datetime', t('You cannot set a scheduled date in the past.'));
     }
     $form_state['values']['time_scheduled'] = $date;
   }
