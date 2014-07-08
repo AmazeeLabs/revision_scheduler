@@ -243,7 +243,7 @@ function revision_scheduler_cron_queue_info() {
  * Implements hook_cron().
  */
 function revision_scheduler_cron() {
-  $ids = db_query("SELECT * FROM {revision_scheduler} WHERE time_scheduled <= :now AND time_queued = 0 AND time_executed = 0", array(':now' => REQUEST_TIME))->fetchCol();
+  $ids = db_query("SELECT * FROM {revision_scheduler} WHERE time_scheduled <= :now AND time_queued = 0 AND time_executed = 0 ORDER BY id ASC", array(':now' => REQUEST_TIME))->fetchCol();
   if ($operations = revision_scheduler_operation_load_multiple($ids)) {
     $queue = DrupalQueue::get('revision_scheduler');
     foreach ($operations as $operation) {

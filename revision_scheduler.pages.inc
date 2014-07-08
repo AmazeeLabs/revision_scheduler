@@ -3,17 +3,37 @@
 function revision_scheduler_list_page($entity_type, $entity) {
   list($entity_id) = entity_extract_ids($entity_type, $entity);
 
-  $operations = db_query("SELECT * FROM {revision_scheduler} WHERE entity_type = :entity_type AND entity_id = :entity_id ORDER BY time_executed ASC, time_scheduled DESC", array(
-    ':entity_type' => $entity_type,
-    ':entity_id' => $entity_id,
-  ))->fetchAllAssoc('id');
-
   $header = array(
     t('Revision'),
     t('Action'),
-    t('Date'),
+    array(
+      'data' => t('Scheduled Date'),
+      'sort' => 'desc',
+      'field' => 'time_scheduled',
+    ),
     t('Operations'),
   );
+
+  $query = db_select('revision_scheduler', 'r')
+    ->extend('TableSort')
+    ->extend('PagerDefault')
+    ->limit(25)
+    ->fields('r')
+    ->orderByHeader($header)
+    ->condition('entity_type', $entity_type)
+    ->condition('entity_id', $entity_id);
+
+  // For operations that have the same scheduled time, sort by executed time,
+  // and then queued time, and then ID since that is the order of execution.
+  // @todo This should probably be removed at some point.
+  $order = $query->getOrderBy();
+  if (!empty($order['time_scheduled'])) {
+    $query->orderBy('time_executed', $order['time_scheduled']);
+    $query->orderBy('time_queued', $order['time_scheduled']);
+    $query->orderBy('id', $order['time_scheduled']);
+  }
+
+  $operations = $query->execute()->fetchAll();
 
   $revision_ids = array();
   foreach ($operations as $operation) {
@@ -29,18 +49,16 @@ function revision_scheduler_list_page($entity_type, $entity) {
     $row = array(
       t('Revision @id: @label', array('@id' => $operation->revision_id, '@label' => $revision ? entity_label($entity_type, $revision) : t('(Deleted)'))),
       check_plain($operation_info['label']),
+      format_date($operation->time_scheduled),
     );
 
     if (!empty($operation->time_executed)) {
-      $row[] = format_date($operation->time_executed);
-      $row[] = t('Completed');
+      $row[] = t('Completed on @date', array('@date' => format_date($operation->time_executed)));
     }
     elseif (!empty($operation->time_queued)) {
-      $row[] = format_date($operation->time_scheduled);
-      $row[] = t('Queued');
+      $row[] = t('Queued on @date', array('@date' => format_date($operation->time_queued)));
     }
     else {
-      $row[] = format_date($operation->time_scheduled);
       $operations = array();
       $value = implode('-', array('run', $operation->id, $operation->operation, $operation->time_scheduled));
       $operations['run'] = array(
@@ -78,6 +96,12 @@ function revision_scheduler_list_page($entity_type, $entity) {
     '#header' => $header,
     '#rows' => $rows,
     '#empty' => t('No scheduled revisions available.'),
+  );
+
+  // Add the pager
+  $build['pager'] = array(
+    '#theme' => 'pager',
+    '#weight' => 5,
   );
 
   return $build;
