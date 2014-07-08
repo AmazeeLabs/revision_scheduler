@@ -68,12 +68,11 @@ function revision_scheduler_list_page($entity_type, $entity) {
           'token' => drupal_get_token($value),
         ) + drupal_get_destination(),
       );
-      // @todo Because of a bug in the date element, disable the edit operation until it can be fixed.
-      //$operations['edit'] = array(
-      //  'title' => t('Edit'),
-      //  'href' => 'revision-scheduler/' . $operation->id . '/edit',
-      //  'query' => drupal_get_destination(),
-      //);
+      $operations['edit'] = array(
+        'title' => t('Edit'),
+        'href' => 'revision-scheduler/' . $operation->id . '/edit',
+        'query' => drupal_get_destination(),
+      );
       $operations['delete'] = array(
         'title' => t('Cancel'),
         'href' => 'revision-scheduler/' . $operation->id . '/delete',
@@ -178,6 +177,10 @@ function revision_scheduler_edit_form($form, &$form_state, $operation) {
     $form['datetime']['#date_year_range'] = '0:+5';
     $form['datetime']['#date_increment'] = 15;
     unset($form['datetime']['#description']);
+
+    if (!empty($operation->time_scheduled)) {
+      $form['datetime']['#default_value'] = format_date($operation->time_scheduled, 'custom', 'Y-m-d H:i');
+    }
   }
 
   $form['actions'] = array('#type' => 'actions');
