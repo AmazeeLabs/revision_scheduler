@@ -127,6 +127,7 @@ function revision_scheduler_add_form($form, &$form_state, $entity_type, $entity)
   $operation->time_scheduled = 0;
   $operation->time_queued = 0;
   $operation->time_executed = 0;
+  $operation->uid = $GLOBALS['user']->uid;
   $form = revision_scheduler_edit_form($form, $form_state, $operation);
 
   $form['revision_id'] = array(
@@ -152,6 +153,7 @@ function revision_scheduler_edit_form($form, &$form_state, $operation) {
   $form['revision_id'] = array('#type' => 'value', '#value' => $operation->revision_id);
   $form['time_queued'] = array('#type' => 'value', '#value' => $operation->time_queued);
   $form['time_executed'] = array('#type' => 'value', '#value' => $operation->time_executed);
+  $form['uid'] = array('#type' => 'value', '#value' => $operation->uid);
 
   $entity = revision_scheduler_entity_revision_load($operation->entity_type, $operation->entity_id, $operation->revision_id);
 

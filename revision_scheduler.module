@@ -139,6 +139,31 @@ function revision_scheduler_field_attach_delete_revision($entity_type, $entity) 
     ->execute();
 }
 
+/**
+ * Implements hook_user_cancel().
+ */
+function revision_scheduler_user_cancel($edit, $account, $method) {
+  switch ($method) {
+    case 'user_cancel_reassign':
+      // Reassign scheduled operations to the anonymous user.
+      db_update('revision_scheduler')
+        ->fields(array('uid' => 0))
+        ->condition('uid', $account->uid)
+        ->execute();
+      break;
+  }
+}
+
+/**
+ * Implements hook_user_delete().
+ */
+function revision_scheduler_user_delete($account) {
+  // Remove any operations scheduled by this user.
+  db_delete('revision_scheduler')
+    ->condition('uid', $account->uid)
+    ->execute();
+}
+
 function revision_scheduler_entity_type_has_revisions($entity_type) {
   $info = entity_get_info($entity_type);
   return !empty($info['entity keys']['revision']) && !empty($info['revision table']);
@@ -299,11 +324,28 @@ function revision_scheduler_operation_process($operation) {
       throw new Exception(t('Revision operation @operation callback @callback does not exist.', $args + array('@callback' => $callback)));
     }
 
+    // Switch the user to the one that created the operation.
+    $original_session_saving = drupal_save_session();
+    $original_user = $GLOBALS['user'];
+    if ($operation->uid != $GLOBALS['user']->uid) {
+      drupal_save_session(FALSE);
+      if ($operation->uid && $account = user_load($operation->uid)) {
+        $GLOBALS['user'] = $account;
+      }
+      else {
+        $GLOBALS['user'] = drupal_anonymous_user();
+      }
+    }
+
     $operation->time_executed = REQUEST_TIME;
     revision_scheduler_operation_save($operation);
 
     // Run the operation callback with the entity and operation.
     $callback($entity, $operation);
+
+    // Restore the user.
+    $GLOBALS['user'] = $original_user;
+    drupal_save_session($original_session_saving);
 
     // Allow modules to react to the operation after it has been processed.
     module_invoke_all('revision_scheduler_operation_postprocess', $entity, $operation);
@@ -370,6 +412,10 @@ function revision_scheduler_operation_load_multiple(array $ids) {
  */
 function revision_scheduler_operation_save($operation) {
   $operation->is_new = empty($operation->id);
+
+  if (!isset($operation->uid)) {
+    $operation->uid = $GLOBALS['user']->uid;
+  }
 
   // Should we reset queued?
   //$operation->queued = 0;
