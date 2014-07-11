@@ -686,8 +686,35 @@ function node_node_revision_operation_revert($node) {
  * Node revision operation callback: delete revision.
  */
 function node_node_revision_operation_delete($node) {
-  node_revision_delete($node->vid);
-  drupal_set_message(t('Revision from %revision-date of @type %title has been deleted.', array('%revision-date' => format_date($node->revision_timestamp), '@type' => node_type_get_name($node), '%title' => $node->title)));
+  if (node_revision_delete($node->vid)) {
+    drupal_set_message(t('Revision from %revision-date of @type %title has been deleted.', array('%revision-date' => format_date($node->revision_timestamp), '@type' => node_type_get_name($node), '%title' => $node->title)));
+  }
+  else {
+    throw new Exception(t('Unable to delete node @nid revision @vid.', array('@nid' => $node->nid, '@vid' => $node->vid)));
+  }
+}
+
+/**
+ * Implements hook_entity_revision_operation_access() on behalf of node.module.
+ */
+function node_entity_revision_operation_access($operation, $entity_type, $entity, $account) {
+  if ($entity_type == 'node') {
+    // node_revision_delete() will not work if the revision is the latest one.
+    if ($operation['operation'] == 'delete') {
+      if (empty($entity->nid)) {
+        // Cannot schedule deletion of new nodes and their first revisions.
+        return FALSE;
+      }
+      else {
+        // node_revision_delete() will fail if this revision is the node's
+        // current revision.
+        $node = node_load($entity->nid);
+        if ($entity->vid == $node->vid) {
+          return FALSE;
+        }
+      }
+    }
+  }
 }
 
 /**
