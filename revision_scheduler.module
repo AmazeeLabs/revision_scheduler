@@ -18,8 +18,9 @@ function revision_scheduler_permission() {
  * Implements hook_menu().
  */
 function revision_scheduler_menu() {
-  // The diff.module already defines this menu path, so skip it if enabled.
-  if (!module_exists('diff')) {
+  // Both diff and workbench_moderation modules add a default local task, so
+  // only add this item if those modules are not available.
+  if (!module_exists('diff') && !module_exists('workbench_moderation')) {
     $items['node/%node/revisions/list'] = array(
       'title' => 'List',
       'type' => MENU_DEFAULT_LOCAL_TASK,
@@ -78,6 +79,78 @@ function revision_scheduler_menu() {
   );
 
   return $items;
+}
+
+/**
+ * Implements hook_menu_alter().
+ */
+function revision_scheduler_menu_alter(array &$items) {
+  $paths = array('node/%node/revisions', 'node/%node/revisions/list');
+  foreach ($paths as $path) {
+    if (isset($items[$path]['access callback'])) {
+      $override = '_revision_scheduler_override_' . $items[$path]['access callback'];
+      if (function_exists($override)) {
+        $items[$path]['access callback'] = $override;
+      }
+    }
+  }
+}
+
+function _revision_scheduler_override__node_revision_access($node, $op = 'view', $account = NULL) {
+  $access = &drupal_static(__FUNCTION__, array());
+
+  $map = array(
+    'view' => 'view revisions',
+    'update' => 'revert revisions',
+    'delete' => 'delete revisions',
+  );
+
+  if (!$node || !isset($map[$op])) {
+    // If there was no node to check against, or the $op was not one of the
+    // supported ones, we return access denied.
+    return FALSE;
+  }
+
+  if (!isset($account)) {
+    $account = $GLOBALS['user'];
+  }
+
+  // Statically cache access by revision ID, user account ID, and operation.
+  $cid = $node->vid . ':' . $account->uid . ':' . $op;
+
+  if (!isset($access[$cid])) {
+    // Perform basic permission checks first.
+    if (!user_access($map[$op], $account) && !user_access('administer nodes', $account)) {
+      return $access[$cid] = FALSE;
+    }
+
+    $node_current_revision = node_load($node->nid);
+    $is_current_revision = $node_current_revision->vid == $node->vid;
+
+    // There should be at least two revisions. If the vid of the given node and
+    // the vid of the current revision differ, then we already have two
+    // different revisions so there is no need for a separate database check.
+    // Also, if you try to revert to or delete the current revision, that's not
+    // good.
+    if ($is_current_revision && ((db_query('SELECT COUNT(vid) FROM {node_revision} WHERE nid = :nid', array(':nid' => $node->nid))->fetchField() == 1 && !db_query("SELECT COUNT(revision_id) FROM {revision_scheduler} WHERE entity_type = 'node' AND entity_id = :nid", array(':nid' => $node->nid))->fetchField()) || $op == 'update' || $op == 'delete')) {
+      $access[$cid] = FALSE;
+    }
+    elseif (user_access('administer nodes', $account)) {
+      $access[$cid] = TRUE;
+    }
+    else {
+      // First check the access to the current revision and finally, if the node
+      // passed in is not the current revision then access to that, too.
+      $access[$cid] = node_access($op, $node_current_revision, $account) && ($is_current_revision || node_access($op, $node, $account));
+    }
+  }
+
+  return $access[$cid];
+}
+
+function _revision_scheduler_override_diff_node_revision_access($node, $op = 'view') {
+  $may_revision_this_type = variable_get('diff_enable_revisions_page_node_' . $node->type, TRUE) || variable_get('enable_revisions_page_' . $node->type, TRUE) || user_access('administer nodes');
+  return $may_revision_this_type && _revision_scheduler_override__node_revision_access($node, $op);
 }
 
 /**
