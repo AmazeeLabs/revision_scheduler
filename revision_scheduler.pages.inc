@@ -293,7 +293,10 @@ function revision_scheduler_delete_form($form, &$form_state, $operation) {
   return confirm_form(
     $form,
     'Are you sure you want to cancel this scheduled revision?',
-    entity_uri($operation->entity_type, $entity)
+    entity_uri($operation->entity_type, $entity),
+    NULL,
+    NULL,
+    t('No')
   );
 }
 
