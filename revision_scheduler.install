@@ -94,6 +94,7 @@ function revision_scheduler_schema() {
  */
 function revision_scheduler_uninstall() {
   variable_del('revision_scheduler_cron_time');
+  variable_del('revision_scheduler_date_pattern');
 }
 
 /**

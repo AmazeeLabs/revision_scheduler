@@ -187,12 +187,15 @@ function revision_scheduler_edit_form($form, &$form_state, $operation, $entity =
     ),
   );
 
-  $date_format = 'Y-m-d H:i';
+  $date_format = variable_get('revision_scheduler_date_pattern', 'Y-m-d H:i');
   $form['time_scheduled'] = array(
     '#type' => 'textfield',
     '#title' => t('Scheduled date'),
     '#default_value' => !empty($operation->time_scheduled) ? format_date($operation->time_scheduled, 'custom', $date_format) : '',
-    '#description' => t('Format: %time. The date format is YYYY-MM-DD and the timezone is %timezone.', array('%time' => format_date(REQUEST_TIME, 'custom', $date_format), '%timezone' => drupal_get_user_timezone())),
+    '#description' => t('Format: %time. The timezone is %timezone.', array(
+      '%time' => format_date(REQUEST_TIME, 'custom', $date_format),
+      '%timezone' => drupal_get_user_timezone(),
+    )),
     '#element_validate' => array('revision_scheduler_validate_time_scheduled'),
     '#attributes' => array(
       'class' => array('revision-scheduler-time-scheduled'),
