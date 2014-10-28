@@ -33,7 +33,6 @@ function revision_scheduler_menu() {
     'title' => 'Schedule',
     'page callback' => 'revision_scheduler_list_page',
     'page arguments' => array('node', 1),
-    // @todo Figure out a better way to control this access.
     'access arguments' => array('schedule revisions'),
     'file' => 'revision_scheduler.pages.inc',
     'type' => MENU_LOCAL_TASK,
@@ -42,8 +41,8 @@ function revision_scheduler_menu() {
     'title' => 'Add scheduled revision',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('revision_scheduler_add_form', 'node', 1),
-    // @todo Figure out a better way to control this access.
-    'access arguments' => array('schedule revisions'),
+    'access callback' => 'revision_scheduler_operation_create_access',
+    'access arguments' => array('node', 1, NULL, TRUE),
     'file' => 'revision_scheduler.pages.inc',
     'type' => MENU_LOCAL_ACTION,
   );
@@ -60,21 +59,24 @@ function revision_scheduler_menu() {
     'title' => 'Edit scheduled revision',
     'page callback' => 'revision_scheduler_operation_run',
     'page arguments' => array(1),
-    'access arguments' => array('schedule revisions'),
+    'access callback' => 'revision_scheduler_operation_access',
+    'access arguments' => array('run', 1),
     'type' => MENU_CALLBACK,
   );
   $items['revision-scheduler/%revision_scheduler_operation/edit'] = array(
     'title' => 'Edit scheduled revision',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('revision_scheduler_edit_form', 1),
-    'access arguments' => array('schedule revisions'),
+    'access callback' => 'revision_scheduler_operation_access',
+    'access arguments' => array('update', 1),
     'file' => 'revision_scheduler.pages.inc',
   );
   $items['revision-scheduler/%revision_scheduler_operation/delete'] = array(
     'title' => 'Cancel scheduled revision',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('revision_scheduler_delete_form', 1),
-    'access arguments' => array('schedule revisions'),
+    'access callback' => 'revision_scheduler_operation_access',
+    'access arguments' => array('delete', 1),
     'file' => 'revision_scheduler.pages.inc',
   );
 
@@ -239,29 +241,24 @@ function revision_scheduler_user_delete($account) {
 
 function revision_scheduler_entity_type_has_revisions($entity_type) {
   $info = entity_get_info($entity_type);
-  return !empty($info['entity keys']['revision']) && !empty($info['revision table']);
+  return !empty($info['entity keys']['id']) && !empty($info['entity keys']['revision']) && !empty($info['revision table']);
 }
 
 /**
  * Return an array of all the revision IDs of a given entity.
  */
-function revision_scheduler_get_all_entity_revision_ids($entity_type, $entity, $exclude_current_revision_id = FALSE) {
-  $info = entity_get_info($entity_type);
-
-  if (empty($info['entity keys']['id']) || empty($info['entity keys']['revision']) || empty($info['revision table'])) {
+function revision_scheduler_get_all_entity_revision_ids($entity_type, $entity_id) {
+  if (!revision_scheduler_entity_type_has_revisions($entity_type)) {
     return array();
   }
 
-  list($entity_id, $revision_id) = entity_extract_ids($entity_type, $entity);
+  $info = entity_get_info($entity_type);
   $id_key = $info['entity keys']['id'];
   $revision_key = $info['entity keys']['revision'];
 
   $query = db_select($info['revision table'], 'revision');
   $query->addField('revision', $revision_key);
   $query->condition('revision.' . $id_key, $entity_id);
-  if ($exclude_current_revision_id) {
-    $query->condition('revision.' . $revision_key, $revision_id, '<>');
-  }
   return $query->execute()->fetchCol();
 }
 
@@ -271,7 +268,7 @@ function revision_scheduler_get_entity_revision_key($entity_type) {
 }
 
 /**
- * Load a single entity revision.
+ * Load a single entity with an optional revision ID.
  *
  * @param string $entity_type
  *   An entity type.
@@ -282,7 +279,7 @@ function revision_scheduler_get_entity_revision_key($entity_type) {
  *   than the latest revision.
  *
  * @return object
- *   An entity objects from entity_load().
+ *   An entity object from entity_load().
  *
  * @see revision_scheduler_entity_revision_load_multiple()
  */
@@ -312,22 +309,23 @@ function revision_scheduler_entity_revision_load($entity_type, $entity_id, $revi
  * @see entity_load()
  */
 function revision_scheduler_entity_revision_load_multiple($entity_type, $entity_id, array $revision_ids) {
-  $revisions = array();
-  if (is_object($entity_id)) {
-    list($entity_id) = entity_extract_ids($entity_type, $entity_id);
+  $revisions = &drupal_static(__FUNCTION__, array());
+
+  if (!isset($revisions[$entity_type . ':' . $entity_id])) {
+    $revisions[$entity_type . ':' . $entity_id] = array();
   }
-  $revision_key = revision_scheduler_get_entity_revision_key($entity_type);
-  foreach ($revision_ids as $revision_id) {
-    if ($entity = revision_scheduler_entity_single_load($entity_type, $entity_id, array($revision_key => $revision_id))) {
-      $revisions[$revision_id] = $entity;
+  $entity_revisions = &$revisions[$entity_type . ':' . $entity_id];
+
+  if ($revision_ids_to_load = array_diff($revision_ids, array_keys($entity_revisions))) {
+    $revision_key = revision_scheduler_get_entity_revision_key($entity_type);
+    foreach ($revision_ids_to_load as $revision_id) {
+      if ($entities = entity_load($entity_type, array($entity_id), array($revision_key => $revision_id))) {
+        $entity_revisions[$revision_id] = reset($entities);
+      }
     }
   }
-  return $revisions;
-}
 
-function revision_scheduler_entity_single_load($entity_type, $entity_id, array $conditions = array()) {
-  $entities = entity_load($entity_type, array($entity_id), $conditions);
-  return !empty($entities) ? reset($entities) : FALSE;
+  return array_intersect_key($entity_revisions, array_flip($revision_ids));
 }
 
 /**
@@ -335,7 +333,7 @@ function revision_scheduler_entity_single_load($entity_type, $entity_id, array $
  */
 function revision_scheduler_cron_queue_info() {
   $info['revision_scheduler'] = array(
-    'worker callback' => 'revision_scheduler_operation_process',
+    'worker callback' => 'revision_scheduler_queue_process_item',
     'time' => variable_get('revision_scheduler_cron_time', 30),
   );
   return $info;
@@ -345,17 +343,27 @@ function revision_scheduler_cron_queue_info() {
  * Implements hook_cron().
  */
 function revision_scheduler_cron() {
-  $ids = db_query("SELECT * FROM {revision_scheduler} WHERE time_scheduled <= :now AND time_queued = 0 AND time_executed = 0 ORDER BY time_scheduled ASC, id ASC", array(':now' => REQUEST_TIME))->fetchCol();
-  if ($operations = revision_scheduler_operation_load_multiple($ids)) {
+  // Ensure that the items are ordered in the same method as
+  // revision_scheduler_operation_uasort()
+  if ($ids = db_query("SELECT * FROM {revision_scheduler} WHERE time_scheduled <= :now AND time_queued = 0 AND time_executed = 0 ORDER BY time_scheduled ASC, id ASC", array(':now' => REQUEST_TIME))->fetchCol()) {
     $queue = DrupalQueue::get('revision_scheduler');
-    foreach ($operations as $operation) {
-      if ($queue->createItem($operation)) {
+    foreach ($ids as $id) {
+      if ($queue->createItem($id)) {
         db_update('revision_scheduler')
-          ->fields(array('time_queued' => REQUEST_TIME))
-          ->condition('id', $operation->id)
+          ->fields(array('time_queued' => time()))
+          ->condition('id', $id)
           ->execute();
       }
     }
+  }
+}
+
+/**
+ * Callback for the revision_scheduler queue.
+ */
+function revision_scheduler_queue_process_item($operation_id) {
+  if ($operation = revision_scheduler_operation_load($operation_id)) {
+    revision_scheduler_operation_process($operation);
   }
 }
 
@@ -393,8 +401,8 @@ function revision_scheduler_operation_process($operation) {
     if (isset($operation_info['file'])) {
       include_once $operation_info['file'];
     }
-    if (!function_exists($callback)) {
-      throw new Exception(t('Revision operation @operation callback @callback does not exist.', $args + array('@callback' => $callback)));
+    if (!is_callable($callback)) {
+      throw new Exception(t('Revision operation @operation callback @callback does not exist.', $args + array('@callback' => (is_array($callback) ? implode('::', $callback) : $callback))));
     }
 
     // Switch the user to the one that created the operation.
@@ -410,11 +418,11 @@ function revision_scheduler_operation_process($operation) {
       }
     }
 
-    $operation->time_executed = REQUEST_TIME;
+    $operation->time_executed = time();
     revision_scheduler_operation_save($operation);
 
     // Run the operation callback with the entity and operation.
-    $callback($entity, $operation);
+    call_user_func($callback, $entity, $operation);
 
     // Restore the user.
     $GLOBALS['user'] = $original_user;
@@ -481,13 +489,18 @@ function revision_scheduler_operation_load_multiple(array $ids) {
  * Save a scheduled revision operation to the database.
  *
  * @param object $operation
- *   A secheduled revision operation record.
+ *   A scheduled revision operation record.
  */
 function revision_scheduler_operation_save($operation) {
   $operation->is_new = empty($operation->id);
 
   if (!isset($operation->uid)) {
     $operation->uid = $GLOBALS['user']->uid;
+  }
+
+  // Ensure the scheduled time is converted to a timestamp.
+  if (!empty($operation->time_scheduled) && !is_numeric($operation->time_scheduled)) {
+    $operation->time_scheduled = strtotime($operation->time_scheduled);
   }
 
   // Should we reset queued?
@@ -530,6 +543,18 @@ function revision_scheduler_operation_delete_multiple(array $ids) {
 }
 
 /**
+ * uasort() callback to order revision operations in proper execution order.
+ */
+function revision_scheduler_operation_uasort($a, $b) {
+  if ($a->time_scheduled != $b->time_scheduled) {
+    return $a->time_scheduled < $b->time_scheduled ? -1 : 1;
+  }
+  else {
+    return $a->id < $b->id ? -1 : 1;
+  }
+}
+
+/**
  * Fetch information about entity revision operations.
  *
  * @see hook_entity_revision_operation_info()
@@ -565,7 +590,7 @@ function revision_scheduler_entity_revision_operation_get_info($entity_type = NU
   return $operations;
 }
 
-function revision_scheduler_operation_access($operation, $entity_type, $entity = NULL, $account = NULL) {
+function _revision_scheduler_operation_access($operation, $entity_type, $entity = NULL, $account = NULL) {
   $access = FALSE;
 
   if (isset($operation['access callback']) || isset($operation['access arguments'])) {
@@ -579,6 +604,9 @@ function revision_scheduler_operation_access($operation, $entity_type, $entity =
     }
     else {
       $access_arguments = isset($operation['access arguments']) ? $operation['access arguments'] : array();
+      if ($access_callback === 'user_access' && count($access_arguments) === 1) {
+        $access_arguments[] = $account;
+      }
       $access = call_user_func_array($access_callback, $access_arguments);
     }
   }
@@ -598,20 +626,25 @@ function revision_scheduler_operation_access($operation, $entity_type, $entity =
  * Fetch the list of available entity revision operation that the user can add.
  */
 function revision_scheduler_entity_revision_operation_get_options($entity_type, $entity = NULL, $account = NULL) {
-  $options = array();
-  $operations = revision_scheduler_entity_revision_operation_get_info($entity_type);
+  $options = &drupal_static(__FUNCTION__, array());
 
-  foreach ($operations as $key => $operation) {
-    if (!revision_scheduler_operation_access($operation, $entity_type, $entity, $account)) {
-      unset($operations[$key]);
+  if (!isset($account)) {
+    $account = $GLOBALS['user'];
+  }
+
+  $cid = md5(serialize(array($entity_type, $entity, $account)));
+
+  if (!isset($options[$cid])) {
+    $options[$cid] = array();
+    $operations = revision_scheduler_entity_revision_operation_get_info($entity_type);
+    foreach ($operations as $key => $operation) {
+      if (_revision_scheduler_operation_access($operation, $entity_type, $entity, $account)) {
+        $options[$cid][$key] = $operation['label'];
+      }
     }
   }
 
-  //$operations = array_filter($operations, 'revision_scheduler_operation_access');
-  foreach ($operations as $operation => $info) {
-    $options[$operation] = $info['label'];
-  }
-  return $options;
+  return $options[$cid];
 }
 
 /**
@@ -630,23 +663,157 @@ function revision_scheduler_entity_revision_operation_get_options($entity_type, 
  *
  * @see entity_load()
  */
-function revision_scheduler_entity_load_by_revision($entity_type, $entity_id, $revision_id = NULL) {
-  $conditions = array();
-  if (!empty($revision_id)) {
-    $info = entity_get_info($entity_type);
-    if (isset($info['entity keys']['revision'])) {
-      $conditions[$info['entity keys']['revision']] = $revision_id;
+
+function revision_scheduler_operation_create_access($entity_type, $entity = NULL, $account = NULL, $check_all_revisions = FALSE) {
+  if (!revision_scheduler_entity_type_has_revisions($entity_type)) {
+    return FALSE;
+  }
+
+  if (!isset($account)) {
+    $account = $GLOBALS['user'];
+  }
+
+  if (!user_access('schedule revisions', $account)) {
+    return FALSE;
+  }
+
+  $access = &drupal_static(__FUNCTION__, array());
+  $cid = md5(serialize(array($entity_type, $entity, $account, $check_all_revisions)));
+
+  if (!isset($access[$cid])) {
+    $access[$cid] = (bool) revision_scheduler_entity_revision_operation_get_options($entity_type, $entity, $account);
+
+    // Fallback check if any of the other entity's revisions are schedulable.
+    if ($check_all_revisions && !$access[$cid] && !empty($entity)) {
+      list($entity_id, $entity_vid) = entity_extract_ids($entity_type, $entity);
+      if (!empty($entity_id)) {
+        // Check to ensure one of the revisions can have a scheduled operation.
+        $revision_ids = revision_scheduler_get_all_entity_revision_ids($entity_type, $entity_id);
+        foreach ($revision_ids as $revision_id) {
+          if ($revision_id != $entity_vid && $revision = revision_scheduler_entity_revision_load($entity_type, $entity_id, $revision_id)) {
+            if (revision_scheduler_entity_revision_operation_get_options($entity_type, $revision, $account)) {
+              $access[$cid] = TRUE;
+              break;
+            }
+          }
+        }
+      }
     }
   }
-  $entities = entity_load($entity_type, array($entity_id), $conditions);
-  return !empty($entities) ? reset($entities) : FALSE;
+
+  return $access[$cid];
+}
+
+function revision_scheduler_operation_access($op, $operation, $account = NULL) {
+  if (!revision_scheduler_entity_type_has_revisions($operation->entity_type)) {
+    return FALSE;
+  }
+
+  if (!user_access('schedule revisions', $account)) {
+    return FALSE;
+  }
+
+  $entity = revision_scheduler_entity_revision_load($operation->entity_type, $operation->entity_id, $operation->revision_id);
+
+  // If the revision does not exist, the operation cannot be run or updated.
+  if ($op == 'run' || $op == 'update') {
+    if (empty($entity)) {
+      return FALSE;
+    }
+  }
+
+  if ($op == 'update') {
+    // The user must have the ability to select an operation in order to edit
+    // it.
+    // @todo Is this actually necessary?
+    if (!revision_scheduler_entity_revision_operation_get_options($operation->entity_type, $entity, $account)) {
+      return FALSE;
+    }
+  }
+
+  if ($op == 'run' || $op == 'update' || $op == 'delete') {
+    // In order to run, edit, or delete the operation, it must not have already
+    // run or been queued for processing.
+    return empty($operation->time_executed) && empty($operation->time_queued);
+  }
+
+  // Invalid $op.
+  return FALSE;
 }
 
 /**
  * Implements hook_field_attach_form().
  */
 function revision_scheduler_field_attach_form($entity_type, $entity, &$form, &$form_state, $langcode) {
-  //$operations = revision_scheduler_entity_revision_operation_get_options($entity_type, $entity);
+  list($entity_id, $revision_id) = entity_extract_ids($entity_type, $entity);
+
+  $form['revision_scheduler'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Revision scheduler'),
+    '#collapsible' => TRUE,
+    '#collapsed' => TRUE,
+    '#group' => 'additional_settings',
+    '#attributes' => array(
+      'class' => array('entity-form-revision-scheduler'),
+    ),
+    '#weight' => 21,
+    '#access' => revision_scheduler_operation_create_access($entity_type, $entity, NULL),
+    '#tree' => TRUE,
+    '#parents' => array_merge($form['#parents'], array('revision_scheduler')),
+  );
+
+  // Pass the form into the edit form to get most of the form elements.
+  $operation = new stdClass();
+  $operation->id = NULL;
+  $operation->entity_type = $entity_type;
+  $operation->entity_id = $entity_id;
+  $operation->revision_id = $revision_id;
+  $operation->operation = NULL;
+  $operation->uid = $GLOBALS['user']->uid;
+  form_load_include($form_state, 'inc', 'revision_scheduler', 'revision_scheduler.pages');
+
+  $form_state_clone = $form_state;
+  $form_state_clone['build_info']['args'] = array($operation, $entity);
+  $form['revision_scheduler'] = revision_scheduler_edit_form($form['revision_scheduler'], $form_state_clone, $operation, $entity);
+
+  // Tweak the form elements.
+  $form['revision_scheduler']['revision_id']['#access'] = FALSE;
+  $form['revision_scheduler']['operation']['#required'] = FALSE;
+  $form['revision_scheduler']['operation']['#empty_option'] = t('- None -');
+  unset($form['revision_scheduler']['actions']);
+
+  // Allow the revision fieldset form elements to be altered using
+  // hook_form_revision_scheduler_edit_form_alter().
+  $hooks = array('form', 'form_revision_scheduler_edit_form');
+  $form_id = 'revision_scheduler_edit_form';
+  drupal_alter($hooks, $form['revision_scheduler'], $form_state_clone, $form_id);
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function revision_scheduler_entity_insert($entity, $entity_type) {
+  if (!empty($entity->revision_scheduler['operation'])) {
+    $operation = (object) $entity->revision_scheduler;
+    list($operation->entity_id, $operation->revision_id) = entity_extract_ids($entity_type, $entity);
+    revision_scheduler_operation_save($operation);
+    $entity->revision_scheduler = (array) $operation;
+  }
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function revision_scheduler_entity_update($entity, $entity_type) {
+  if (!empty($entity->revision_scheduler['operation'])) {
+    $operation = (object) $entity->revision_scheduler;
+    // Update the revision ID in case a new revision was created.
+    list(, $operation->revision_id) = entity_extract_ids($entity_type, $entity);
+    revision_scheduler_operation_save($operation);
+    $entity->revision_scheduler = (array) $operation;
+  }
+
+  drupal_static_reset('revision_scheduler_entity_revision_load_multiple');
 }
 
 /**
@@ -699,20 +866,23 @@ function node_node_revision_operation_delete($node) {
  */
 function node_entity_revision_operation_access($operation, $entity_type, $entity, $account) {
   if ($entity_type == 'node') {
-    // node_revision_delete() will not work if the revision is the latest one.
-    if ($operation['operation'] == 'delete') {
-      if (empty($entity->nid)) {
-        // Cannot schedule deletion of new nodes and their first revisions.
-        return FALSE;
-      }
-      else {
-        // node_revision_delete() will fail if this revision is the node's
-        // current revision.
-        $node = node_load($entity->nid);
-        if ($entity->vid == $node->vid) {
+    switch ($operation['operation']) {
+      case 'delete':
+      case 'revert':
+        if (empty($entity->nid)) {
+          // Cannot schedule reversion or deletion of new nodes.
           return FALSE;
         }
-      }
+        else {
+          // node_revision_delete() will fail if this revision is the node's
+          // current revision.
+          // Also does not make sense to revert to the node's current revision.
+          $node = node_load($entity->nid);
+          if ($entity->vid == $node->vid) {
+            return FALSE;
+          }
+        }
+        break;
     }
   }
 }

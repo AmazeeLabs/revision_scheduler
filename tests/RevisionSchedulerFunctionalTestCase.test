@@ -1,0 +1,160 @@
+<?php
+
+class RevisionSchedulerFunctionalTestCase extends DrupalWebTestCase {
+  protected $profile = 'testing';
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Functional tests',
+      'description' => '',
+      'group' => 'Revision Scheduler',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('revision_scheduler', 'revision_scheduler_test'));
+  }
+
+  public function testNodeRevisionScheduling() {
+    $type = $this->drupalCreateContentType()->type;
+    $account = $this->drupalCreateUser(array(
+      'bypass node access',
+      'administer nodes',
+      'schedule revisions',
+    ));
+    $this->drupalLogin($account);
+
+    $vids = revision_scheduler_get_all_entity_revision_ids('node', 0);
+    $this->assertIdentical(count($vids), 0);
+    $options = revision_scheduler_entity_revision_operation_get_options('node', NULL, $account);
+    $this->assertIdentical(array_keys($options), array('test_new', 'test_permission'));
+    $options = revision_scheduler_entity_revision_operation_get_options('node', NULL, drupal_anonymous_user());
+    $this->assertIdentical(array_keys($options), array('test_new', 'test_anonymous'));
+
+    $this->drupalGet('node/add/' . $type);
+    $edit = array(
+      'title' => 'First revision',
+      'revision_scheduler[operation]' => 'test_new',
+      'revision_scheduler[time_scheduled]' => '',
+    );
+    $this->drupalPost('node/add/' . $type, $edit, 'Save');
+    $this->assertText('The revision scheduled date field is required.');
+
+    $edit['revision_scheduler[time_scheduled]'] = format_date(0, 'custom', 'Y-m-d H:i');
+    $this->drupalPost(NULL, $edit, 'Save');
+    $this->assertText('You cannot set a revision scheduled date in the past.');
+
+    $first_time = time();
+    $edit['revision_scheduler[time_scheduled]'] = format_date($first_time + 3600, 'custom', 'Y-m-d H:i');
+    $this->drupalPost(NULL, $edit, 'Save');
+    $this->assertText('First revision has been created.');
+    $node = $this->drupalGetNodeByTitle('First revision', TRUE);
+
+    $vids = revision_scheduler_get_all_entity_revision_ids('node', $node->nid);
+    $this->assertIdentical(count($vids), 1);
+    $options = revision_scheduler_entity_revision_operation_get_options('node', $node, $account);
+    $this->assertIdentical(array_keys($options), array('test_existing', 'test_permission'));
+    $options = revision_scheduler_entity_revision_operation_get_options('node', $node, drupal_anonymous_user());
+    $this->assertIdentical(array_keys($options), array('test_existing', 'test_anonymous'));
+
+    $second_time = time();
+    $edit = array(
+      'title' => 'Second revision',
+      'revision' => TRUE,
+      'revision_scheduler[operation]' => 'test_existing',
+      'revision_scheduler[time_scheduled]' => format_date($second_time + 3000, 'custom', 'Y-m-d H:i'),
+    );
+    $this->drupalPost('node/' . $node->nid . '/edit', $edit, 'Save');
+    $this->assertText('Second revision has been updated.');
+    $node = $this->drupalGetNodeByTitle('Second revision', TRUE);
+
+    $vids = revision_scheduler_get_all_entity_revision_ids('node', $node->nid);
+    $this->assertIdentical(count($vids), 2);
+    $options = revision_scheduler_entity_revision_operation_get_options('node', $node, $account);
+    $this->assertIdentical(array_keys($options), array('test_existing', 'test_permission'));
+    $options = revision_scheduler_entity_revision_operation_get_options('node', $node, drupal_anonymous_user());
+    $this->assertIdentical(array_keys($options), array('test_existing', 'test_anonymous'));
+
+    // Set the scheduled time for all currently scheduled operations back one
+    // day so they can be run on cron now.
+    $this->pushBackOperations();
+
+    $results = drupal_static('revision_scheduler_test', array());
+    $this->assertIdentical(count($results), 0);
+    drupal_cron_run();
+    $results = drupal_static('revision_scheduler_test', array());
+    $this->assertIdentical(count($results), 2);
+    $this->assertIdentical($results[0]['operation']->operation, 'test_existing');
+    $this->assertIdentical($results[1]['operation']->operation, 'test_new');
+
+    //$this->drupalGet('node/' . $node->nid . '/revisions');
+    //$this->drupalGet('node/' . $node->nid . '/revisions/schedule');
+
+    // Add a manual scheduled operation.
+    /*$edit = array(
+      'revision_id' => min($vids),
+      'operation' => 'test_permission',
+    );
+    $this->drupalPostAJAX('node/' . $node->nid . '/revisions/schedule/add', $edit, 'revision_id');
+    $third_time = time();
+    $edit += array(
+      'operation' => 'revert',
+      'time_scheduled' => format_date($third_time + 3600, 'custom', 'Y-m-d H:i'),
+    );
+    $this->drupalPost(NULL, $edit, 'Schedule');*/
+  }
+
+  public function testDeletedRevisions() {
+    $type = $this->drupalCreateContentType()->type;
+
+    // Create a node with two revisions.
+    $revision1 = $this->drupalCreateNode(array('type' => $type));
+    $nid = $revision1->nid;
+    $revision2 = clone $revision1;
+    $revision2->revision = TRUE;
+    node_save($revision2);
+    $this->assertNotEqual($revision1->vid, $revision2->vid);
+
+    // Schedule the following operations:
+    // 1. test revision 1
+    // 2. delete revision 1
+    // 3. test revision 1 (should be deleted when operation #2 is executed)
+    // 4. test revision 2
+    $operation = (object) array('entity_type' => 'node', 'entity_id' => $nid, 'revision_id' => $revision1->vid, 'operation' => 'test_existing', 'time_scheduled' => 1);
+    revision_scheduler_operation_save($operation);
+    $operation = (object) array('entity_type' => 'node', 'entity_id' => $nid, 'revision_id' => $revision1->vid, 'operation' => 'delete', 'time_scheduled' => 1);
+    revision_scheduler_operation_save($operation);
+    $operation = (object) array('entity_type' => 'node', 'entity_id' => $nid, 'revision_id' => $revision1->vid, 'operation' => 'test_existing', 'time_scheduled' => 1);
+    revision_scheduler_operation_save($operation);
+    $operation = (object) array('entity_type' => 'node', 'entity_id' => $nid, 'revision_id' => $revision2->vid, 'operation' => 'test_existing', 'time_scheduled' => 1);
+    revision_scheduler_operation_save($operation);
+
+    $results = drupal_static('revision_scheduler_test', array());
+    $this->assertIdentical(count($results), 0);
+    drupal_cron_run();
+    $results = drupal_static('revision_scheduler_test', array());
+    $this->assertIdentical(count($results), 3);
+    $this->assertIdentical($results[0]['operation']->operation, 'test_existing');
+    $this->assertIdentical($results[0]['entity']->vid, $revision1->vid);
+    $this->assertIdentical($results[1]['operation']->operation, 'delete');
+    $this->assertIdentical($results[1]['entity']->vid, $revision1->vid);
+    $this->assertIdentical($results[2]['operation']->operation, 'test_existing');
+    $this->assertIdentical($results[2]['entity']->vid, $revision2->vid);
+
+    $this->assertFalse(node_load($nid, $revision1->vid, TRUE));
+    $this->assertTrue(node_load($nid, $revision2->vid, TRUE));
+    $vids = revision_scheduler_get_all_entity_revision_ids('node', $nid);
+    $this->assertIdentical(count($vids), 1);
+  }
+
+  protected function pushBackOperations($interval = 86400) {
+    $count = db_update('revision_scheduler')
+      ->expression('time_scheduled', 'time_scheduled - :interval', array(':interval' => $interval))
+      ->condition('time_queued', 0)
+      ->condition('time_executed', 0)
+      ->execute();
+    $this->pass("Pushed $count existing, un-run revision operations back $interval seconds.");
+    return $count;
+  }
+
+}

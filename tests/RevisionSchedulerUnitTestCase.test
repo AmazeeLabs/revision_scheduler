@@ -1,0 +1,30 @@
+<?php
+
+class RevisionSchedulerUnitTestCase extends DrupalUnitTestCase {
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Unit tests',
+      'description' => '',
+      'group' => 'Revision Scheduler',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp();
+    drupal_load('module', 'revision_scheduler');
+  }
+
+  public function testUasort() {
+    $revisions = array();
+    $revisions[1] = (object) array('id' => '1', 'time_scheduled' => '10');
+    $revisions[10] = (object) array('id' => '10', 'time_scheduled' => 10);
+    $revisions[100] = (object) array('id' => 100, 'time_scheduled' => '0');
+    $revisions[0] = (object) array('id' => 0, 'time_scheduled' => 0);
+    $revisions[3] = (object) array('id' => '3', 'time_scheduled' => 5);
+    $revisions[4] = (object) array('id' => '4', 'time_scheduled' => '5');
+    uasort($revisions, 'revision_scheduler_operation_uasort');
+    $this->assertIdentical(array_keys($revisions), array(0, 100, 3, 4, 1, 10));
+  }
+
+}

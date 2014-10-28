@@ -1,0 +1,73 @@
+<?php
+
+/**
+* Implements hook_entity_revision_operation_info() on behalf of node.module.
+*/
+function revision_scheduler_test_entity_revision_operation_info() {
+  $operations['node']['test_new'] = array(
+    'label' => t('Test new node'),
+    'access callback' => TRUE,
+    'callback' => 'revision_scheduler_test_operation',
+  );
+  $operations['node']['test_existing'] = array(
+    'label' => t('Test existing node'),
+    'access callback' => TRUE,
+    'callback' => 'revision_scheduler_test_operation',
+  );
+  $operations['node']['test_permission'] = array(
+    'label' => t('Test permission'),
+    'access arguments' => array('bypass node access'),
+    'callback' => 'revision_scheduler_test_operation',
+  );
+  $operations['node']['test_anonymous'] = array(
+    'label' => t('Test anonymous'),
+    'access callback' => TRUE,
+    'callback' => 'revision_scheduler_test_operation',
+  );
+  $operations['node']['test_no_access'] = array(
+    'label' => t('No access test'),
+    'access callback' => FALSE,
+    'callback' => 'revision_scheduler_test_operation',
+  );
+  $operations['file']['file_only'] = array(
+    'label' => t('File operation'),
+    'access callback' => TRUE,
+    'callback' => 'revision_scheduler_test_operation',
+  );
+
+  return $operations;
+}
+
+/**
+ * Revision scheduler callback: record the results to a static variable.
+ */
+function revision_scheduler_test_operation($entity, $operation) {
+  $results = &drupal_static('revision_scheduler_test_process', array());
+  $results[] = array('entity' => $entity, 'operation' => $operation, 'user' => $GLOBALS['user']);
+}
+
+/**
+ * Implements hook_revision_scheduler_operation_postprocess().
+ */
+function revision_scheduler_test_revision_scheduler_operation_postprocess($entity, $operation) {
+  $results = &drupal_static('revision_scheduler_test', array());
+  $results[] = array('entity' => $entity, 'operation' => $operation);
+}
+
+/**
+ * Implements hook_entity_revision_operation_access().
+ */
+function revision_scheduler_test_entity_revision_operation_access($operation, $entity_type, $entity, $account) {
+  list($entity_id) = !empty($entity) ? entity_extract_ids($entity_type, $entity) : array(NULL);
+
+  switch ($operation['operation']) {
+    case 'test_new':
+      return empty($entity_id);
+
+    case 'test_existing':
+      return !empty($entity_id);
+
+    case 'test_anonymous':
+      return empty($account->uid);
+  }
+}
