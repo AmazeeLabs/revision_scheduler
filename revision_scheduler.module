@@ -335,6 +335,7 @@ function revision_scheduler_cron_queue_info() {
   $info['revision_scheduler'] = array(
     'worker callback' => 'revision_scheduler_queue_process_item',
     'time' => variable_get('revision_scheduler_cron_time', 30),
+    'skip on cron' => variable_get('revision_scheduler_disable_cron', FALSE),
   );
   return $info;
 }
