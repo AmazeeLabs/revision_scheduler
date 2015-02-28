@@ -752,6 +752,16 @@ function revision_scheduler_operation_access($op, $operation, $account = NULL) {
  * Implements hook_field_attach_form().
  */
 function revision_scheduler_field_attach_form($entity_type, $entity, &$form, &$form_state, $langcode) {
+  // Try to detect if this really is an entity edit / add form, if not skip
+  // further processing. Unfortunately taxonomy term has a naming inconsistency
+  // thus we need a special handling for it.
+  $form_entity_type = $entity_type;
+  if ($form_entity_type == 'taxonomy_term') {
+    $form_entity_type = 'term';
+  }
+  if (!isset($form_state[$form_entity_type])) {
+    return;
+  }
   list($entity_id, $revision_id) = entity_extract_ids($entity_type, $entity);
 
   $form['revision_scheduler'] = array(
