@@ -363,13 +363,10 @@ function revision_scheduler_cron() {
  * Callback for the revision_scheduler queue.
  */
 function revision_scheduler_queue_process_item($operation_id) {
-  // Backwards support for any existing items that were in the queue.
-  // @todo Remove before stable release.
-  if (is_object($operation_id)) {
-    revision_scheduler_operation_process($operation_id);
-  }
-
-  if ($operation = revision_scheduler_operation_load($operation_id)) {
+  // Backwards support for any existing items that were in the queue, stored
+  // as objects.
+  $operation = is_object($operation_id) ? $operation_id : revision_scheduler_operation_load($operation_id);
+  if ($operation) {
     revision_scheduler_operation_process($operation);
   }
 }
