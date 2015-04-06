@@ -798,9 +798,7 @@ function revision_scheduler_field_attach_form($entity_type, $entity, &$form, &$f
 
   // Allow the revision fieldset form elements to be altered using
   // hook_form_revision_scheduler_edit_form_alter().
-  $hooks = array('form', 'form_revision_scheduler_edit_form');
-  $form_id = 'revision_scheduler_edit_form';
-  drupal_alter($hooks, $form['revision_scheduler'], $form_state_clone, $form_id);
+  drupal_alter('form_revision_scheduler_edit_form', $form['revision_scheduler'], $form_state_clone);
 }
 
 /**
