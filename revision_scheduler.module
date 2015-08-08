@@ -5,6 +5,16 @@
  */
 
 /**
+ * Implement hook_views_api().
+ */
+function revision_scheduler_views_api() {
+  return array(
+    'api' => 3.0,
+    'path' => drupal_get_path('module', 'revision_scheduler') . '/views',
+  );
+}
+
+/**
  * Implements hook_permission().
  */
 function revision_scheduler_permission() {
