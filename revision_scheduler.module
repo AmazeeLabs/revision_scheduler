@@ -20,6 +20,11 @@ function revision_scheduler_views_api() {
 function revision_scheduler_permission() {
   $permission['schedule revisions'] = array(
     'title' => t('Schedule revisions'),
+    'description' => t('Give this permission to users who should be able to schedule revisions for content which has no revision scheduled yet.')
+  );
+  $permission['edit schedules'] = array(
+    'title' => t('Edit schedules'),
+    'description' => t('Give this permission to users who should be able to edit the schedules for the revisions. Editing means that they can edit the time and the revision which is being scheduled.')
   );
   return $permission;
 }
@@ -506,6 +511,29 @@ function revision_scheduler_operation_load_multiple(array $ids) {
  *   A scheduled revision operation record.
  */
 function revision_scheduler_operation_save($operation) {
+  // If we do not want to edit the last schedule, and we have an id for the
+  // operation, then we just unset the id, which will basically trigger the
+  // creation of a new schedule. But, we unset the id only if we specifically
+  // say that we do not want to edit the schedule.
+  if (!empty($operation->id) && isset($operation->edit_schedule) && empty($operation->edit_schedule)) {
+    unset($operation->id);
+  }
+
+  // Check if we have to remove any other active schedules.
+  if (!empty($operation->remove_other_schedules)) {
+    $schedules = revision_scheduler_entity_schedules($operation->entity_type, $operation->entity_id);
+    if (!empty($schedules)) {
+      $ids = array_keys($schedules);
+      revision_scheduler_operation_delete_multiple($ids);
+    }
+    // When we do that, we automatically have to unset the operation id, because
+    // this is not valid anymore. In this case, we will always create a new
+    // schedule.
+    if (!empty($operation->id) && !empty($schedules[$operation->id])) {
+      unset($operation->id);
+    }
+  }
+
   $operation->is_new = empty($operation->id);
 
   if (!isset($operation->uid)) {
@@ -688,7 +716,13 @@ function revision_scheduler_operation_create_access($entity_type, $entity = NULL
   }
 
   if (!user_access('schedule revisions', $account)) {
-    return FALSE;
+    // If the user does not have the right to schedule revisions, we do an
+    // additional check: we directly deny the access only if the user either
+    // does not have the right to edit schedules or there are no active
+    // schedules for the entity.
+    if (!user_access('edit schedules', $account) || !revision_scheduler_entity_schedules($entity_type, $entity)) {
+      return FALSE;
+    }
   }
 
   $access = &drupal_static(__FUNCTION__, array());
@@ -716,6 +750,30 @@ function revision_scheduler_operation_create_access($entity_type, $entity = NULL
   }
 
   return $access[$cid];
+}
+
+/**
+ * Checks if an entity has any active schedules.
+ *
+ * @param string $entity_type
+ *  The entity type.
+ * @param int|object $entity
+ *  The entity object or the entity to be checked.
+ */
+function revision_scheduler_entity_schedules($entity_type, $entity) {
+  if (is_object($entity)) {
+    list($entity_id) = entity_extract_ids($entity_type, $entity);
+  }
+  else {
+    $entity_id = $entity;
+  }
+  $query = db_select('revision_scheduler', 'rs')->fields('rs');
+  $query->condition('rs.entity_type', $entity_type)->condition('rs.entity_id', $entity_id);
+  // We search only for schedules which are still active, so they were not yet
+  // queued to be executed or already executed.
+  $query->condition('rs.time_queued', 0)->condition('rs.time_executed', 0);
+  $query->orderBy('rs.time_scheduled', 'DESC');
+  return $query->execute()->fetchAllAssoc('id');
 }
 
 function revision_scheduler_operation_access($op, $operation, $account = NULL) {
@@ -787,18 +845,39 @@ function revision_scheduler_field_attach_form($entity_type, $entity, &$form, &$f
   );
 
   // Pass the form into the edit form to get most of the form elements.
-  $operation = new stdClass();
-  $operation->id = NULL;
-  $operation->entity_type = $entity_type;
-  $operation->entity_id = $entity_id;
-  $operation->revision_id = $revision_id;
-  $operation->operation = NULL;
-  $operation->uid = $GLOBALS['user']->uid;
+  $existing_schedules = revision_scheduler_entity_schedules($entity_type, $entity_id);
+  if (!empty($existing_schedules)) {
+    $operation = reset($existing_schedules);
+  }
+  else {
+    $operation = new stdClass();
+    $operation->id = NULL;
+    $operation->entity_type = $entity_type;
+    $operation->entity_id = $entity_id;
+    $operation->revision_id = $revision_id;
+    $operation->operation = NULL;
+    $operation->uid = $GLOBALS['user']->uid;
+  }
+
   form_load_include($form_state, 'inc', 'revision_scheduler', 'revision_scheduler.pages');
 
   $form_state_clone = $form_state;
   $form_state_clone['build_info']['args'] = array($operation, $entity);
   $form['revision_scheduler'] = revision_scheduler_edit_form($form['revision_scheduler'], $form_state_clone, $operation, $entity);
+  if (!empty($operation->id)) {
+    $form['revision_scheduler']['edit_schedule'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Edit the last schedule.'),
+      '#description' => t('There is already a schedule for this node. If you uncheck this option, you will create a new schedule instead of updating the last one.'),
+      '#default_value' => TRUE,
+    );
+    $form['revision_scheduler']['remove_other_schedules'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Remove other active schedules.'),
+      '#description' => t('Check this if you want to remove any active schedules for this node. All the queued or executed ones will not be affected.'),
+      '#default_value' => FALSE,
+    );
+  }
 
   // Tweak the form elements.
   $form['revision_scheduler']['revision_id']['#access'] = FALSE;
@@ -833,6 +912,15 @@ function revision_scheduler_entity_update($entity, $entity_type) {
     list(, $operation->revision_id) = entity_extract_ids($entity_type, $entity);
     revision_scheduler_operation_save($operation);
     $entity->revision_scheduler = (array) $operation;
+  }
+  elseif (!empty($entity->revision_scheduler['remove_other_schedules'])) {
+    // We can still have the case when there is no operation set, but we still
+    // want to remove all the schedules.
+    $schedules = revision_scheduler_entity_schedules($entity_type, $entity);
+    if (!empty($schedules)) {
+      $ids = array_keys($schedules);
+      revision_scheduler_operation_delete_multiple($ids);
+    }
   }
 
   drupal_static_reset('revision_scheduler_entity_revision_load_multiple');
